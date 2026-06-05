@@ -1,24 +1,26 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
+import requests
 
 # =========================================================
-# CONFIG
+# APP CONFIG
 # =========================================================
-st.set_page_config(page_title="Wallet Salyvon", layout="wide")
+st.set_page_config(page_title="Wallet Salyvon V14", layout="wide")
 
-conn = sqlite3.connect("wallet_salyvon.db", check_same_thread=False)
+# =========================================================
+# DB
+# =========================================================
+conn = sqlite3.connect("wallet_salyvon_v14.db", check_same_thread=False)
 c = conn.cursor()
 
-# =========================================================
-# DATABASE
-# =========================================================
 c.execute("""
 CREATE TABLE IF NOT EXISTS accounts (
     name TEXT PRIMARY KEY,
-    type TEXT
+    type TEXT,
+    currency TEXT
 )
 """)
 
@@ -30,6 +32,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     type TEXT,
     category TEXT,
     amount REAL,
+    currency TEXT,
     date TEXT
 )
 """)
@@ -44,15 +47,46 @@ CREATE TABLE IF NOT EXISTS budgets (
 conn.commit()
 
 # =========================================================
+# LIVE NBU FX
+# =========================================================
+@st.cache_data(ttl=3600)
+def get_nbu():
+    url = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json"
+    data = requests.get(url).json()
+    rates = {"UAH": 1}
+    for i in data:
+        rates[i["cc"]] = i["rate"]
+    return rates
+
+FX = get_nbu()
+
+def to_uah(amount, currency):
+    return amount * FX.get(currency, 1)
+
+# =========================================================
+# BINANCE CRYPTO
+# =========================================================
+@st.cache_data(ttl=30)
+def get_binance():
+    url = "https://api.binance.com/api/v3/ticker/price"
+    data = requests.get(url).json()
+    return {i["symbol"]: float(i["price"]) for i in data}
+
+CRYPTO = get_binance()
+
+def crypto_to_uah(amount, coin):
+    usd_uah = FX.get("USD", 40)
+    price = CRYPTO.get(coin + "USDT")
+    if price:
+        return amount * price * usd_uah
+    return 0
+
+# =========================================================
 # HELPERS
 # =========================================================
-def add_account(name, type_):
-    c.execute("INSERT OR IGNORE INTO accounts VALUES (?,?)", (name, type_))
-    conn.commit()
-
-def add_tx(person, account, t, cat, amt):
+def add_tx(person, account, t, cat, amt, cur):
     c.execute("""
-        INSERT INTO transactions VALUES (?,?,?,?,?,?,?)
+        INSERT INTO transactions VALUES (?,?,?,?,?,?,?,?)
     """, (
         str(uuid.uuid4()),
         person,
@@ -60,178 +94,130 @@ def add_tx(person, account, t, cat, amt):
         t,
         cat,
         amt,
+        cur,
         datetime.now().strftime("%Y-%m-%d")
     ))
     conn.commit()
 
-def delete_tx(tx_id):
-    c.execute("DELETE FROM transactions WHERE id=?", (tx_id,))
-    conn.commit()
-
 def load_df():
-    return pd.read_sql("SELECT * FROM transactions", conn)
+    df = pd.read_sql("SELECT * FROM transactions", conn)
+    df["date"] = pd.to_datetime(df["date"])
 
-def load_accounts():
-    return pd.read_sql("SELECT * FROM accounts", conn)
+    def convert(r):
+        if r["currency"] in ["BTC", "ETH"]:
+            return crypto_to_uah(r["amount"], r["currency"])
+        return to_uah(r["amount"], r["currency"])
 
-def load_budgets():
-    return pd.read_sql("SELECT * FROM budgets", conn)
+    df["uah"] = df.apply(convert, axis=1)
+    return df
 
 df = load_df()
-accounts = load_accounts()
-budgets = load_budgets()
-
-# =========================================================
-# STYLE
-# =========================================================
-st.markdown("""
-<style>
-body { background:#f6f7fb; }
-
-.card {
-    background:white;
-    padding:16px;
-    border-radius:16px;
-    box-shadow:0 4px 14px rgba(0,0,0,0.08);
-    text-align:center;
-}
-
-.big { font-size:26px; font-weight:700; }
-.small { color:#6b7280; }
-
-.good { color:#16a34a; }
-.bad { color:#ef4444; }
-</style>
-""", unsafe_allow_html=True)
 
 # =========================================================
 # TITLE
 # =========================================================
-st.title("💼 Wallet Salyvon")
+st.title("💼 Wallet Salyvon V14")
 
 # =========================================================
-# KPIs
+# FILTERS
 # =========================================================
-income = df[df.type=="income"]["amount"].sum() if not df.empty else 0
-expense = df[df.type=="expense"]["amount"].sum() if not df.empty else 0
+period = st.selectbox("📅 Період", ["Сьогодні","7 днів","Місяць","Рік","Все"])
+
+now = datetime.now()
+
+if period == "Сьогодні":
+    filtered = df[df["date"] >= now - timedelta(days=1)]
+elif period == "7 днів":
+    filtered = df[df["date"] >= now - timedelta(days=7)]
+elif period == "Місяць":
+    filtered = df[df["date"] >= now - timedelta(days=30)]
+elif period == "Рік":
+    filtered = df[df["date"] >= now - timedelta(days=365)]
+else:
+    filtered = df
+
+# =========================================================
+# KPI
+# =========================================================
+income = filtered[filtered.type=="income"]["uah"].sum()
+expense = filtered[filtered.type=="expense"]["uah"].sum()
 balance = income - expense
 
-c1,c2,c3 = st.columns(3)
+st.metric("💰 Net Worth (UAH)", f"{balance:,.0f}")
 
-with c1:
-    st.markdown(f"<div class='card'><div class='small'>Баланс</div><div class='big'>{balance:.2f} ₴</div></div>", unsafe_allow_html=True)
+# =========================================================
+# BREAKDOWN (IMPORTANT UPGRADE)
+# =========================================================
+st.subheader("🏦 Структура активів")
 
-with c2:
-    st.markdown(f"<div class='card'><div class='small'>Дохід</div><div class='big good'>{income:.2f} ₴</div></div>", unsafe_allow_html=True)
+cards = filtered[filtered.account.str.contains("Карт")]["uah"].sum()
+cash = filtered[filtered.account.str.contains("Готів")]["uah"].sum()
+crypto = filtered[filtered.currency.isin(["BTC","ETH"])]["uah"].sum()
+fx = filtered[filtered.currency.isin(["USD","EUR","PLN"])]["uah"].sum()
 
-with c3:
-    st.markdown(f"<div class='card'><div class='small'>Витрати</div><div class='big bad'>{expense:.2f} ₴</div></div>", unsafe_allow_html=True)
+c1,c2,c3,c4 = st.columns(4)
+
+c1.metric("💳 Карти", f"{cards:,.0f} ₴")
+c2.metric("💵 Готівка", f"{cash:,.0f} ₴")
+c3.metric("💱 Валюта", f"{fx:,.0f} ₴")
+c4.metric("₿ Крипта", f"{crypto:,.0f} ₴")
 
 st.divider()
 
 # =========================================================
-# TABS
+# ANALYTICS
 # =========================================================
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Дашборд",
-    "➕ Транзакції",
-    "🏦 Рахунки",
-    "🎯 Бюджети"
-])
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("👨‍👩‍👧 Сім’я")
+    st.bar_chart(filtered.groupby("person")["uah"].sum())
+
+with col2:
+    st.subheader("📊 Категорії витрат")
+    st.bar_chart(filtered[filtered.type=="expense"].groupby("category")["uah"].sum())
 
 # =========================================================
-# DASHBOARD
+# BUDGET ENGINE
 # =========================================================
-with tab1:
-    st.subheader("👨‍👩‍👧 Сімейні витрати")
+st.subheader("🎯 Бюджети")
 
-    if not df.empty:
-        st.bar_chart(df.groupby("person")["amount"].sum())
-        st.bar_chart(df[df.type=="expense"].groupby("category")["amount"].sum())
+cat = st.text_input("Категорія", key="b1")
+lim = st.number_input("Ліміт", key="b2", min_value=0.0)
+
+if st.button("Зберегти бюджет"):
+    c.execute("INSERT OR REPLACE INTO budgets VALUES (?,?)", (cat, lim))
+    conn.commit()
+    st.rerun()
+
+budgets = pd.read_sql("SELECT * FROM budgets", conn)
+st.dataframe(budgets)
+
+for _, b in budgets.iterrows():
+    spent = filtered[(filtered.category==b.category)&(filtered.type=="expense")]["uah"].sum()
+
+    if spent > b.limit_amount:
+        st.error(f"🔥 {b.category}: {spent:,.0f} / {b.limit_amount}")
+    else:
+        st.write(f"{b.category}: {spent:,.0f} / {b.limit_amount}")
+
+st.divider()
 
 # =========================================================
 # TRANSACTIONS
 # =========================================================
-with tab2:
-    st.subheader("➕ Додати транзакцію")
+st.subheader("➕ Додати транзакцію")
 
-    person = st.selectbox(
-        "Хто витратив",
-        ["Влад", "Сонечко"],
-        key="person_select"
-    )
+person = st.selectbox("Хто", ["Влад","Сонечко"])
+account = st.text_input("Рахунок")
+t = st.selectbox("Тип", ["income","expense"])
+cat = st.text_input("Категорія")
+cur = st.selectbox("Валюта", ["UAH","USD","EUR","PLN","BTC","ETH"])
+amt = st.number_input("Сума", min_value=0.0)
 
-    account = st.selectbox(
-        "Рахунок",
-        ["Картка 1", "Картка 2", "Кредитка", "Готівка", "Крипта", "Інвестиції"],
-        key="account_select"
-    )
+if st.button("Додати"):
+    add_tx(person, account, t, cat, amt, cur)
+    st.rerun()
 
-    t = st.selectbox("Тип", ["income","expense"], key="type_select")
-
-    cat = st.text_input("Категорія", key="tx_category")
-
-    amt = st.number_input("Сума", min_value=0.0, key="tx_amount")
-
-    if st.button("Додати", key="add_tx_btn"):
-        add_tx(person, account, t, cat, amt)
-        st.rerun()
-
-    st.subheader("🧾 Історія")
-
-    if not df.empty:
-        for _, row in df.sort_values("date", ascending=False).iterrows():
-            c1,c2,c3,c4,c5,c6 = st.columns(6)
-
-            with c1: st.write(row["person"])
-            with c2: st.write(row["account"])
-            with c3: st.write(row["type"])
-            with c4: st.write(row["category"])
-            with c5: st.write(row["amount"])
-
-            with c6:
-                if st.button("❌", key=f"del_{row['id']}"):
-                    delete_tx(row["id"])
-                    st.rerun()
-
-# =========================================================
-# ACCOUNTS
-# =========================================================
-with tab3:
-    st.subheader("🏦 Рахунки")
-
-    name = st.text_input("Назва рахунку", key="acc_name")
-    type_ = st.selectbox("Тип", ["card","cash","crypto","investment","credit"], key="acc_type")
-
-    if st.button("Додати рахунок", key="add_acc"):
-        add_account(name,type_)
-        st.rerun()
-
-    st.dataframe(accounts)
-
-# =========================================================
-# BUDGETS
-# =========================================================
-with tab4:
-    st.subheader("🎯 Бюджети")
-
-    cat = st.text_input("Категорія", key="budget_cat")
-    limit = st.number_input("Ліміт", min_value=0.0, key="budget_limit")
-
-    if st.button("Зберегти", key="save_budget"):
-        c.execute("INSERT OR REPLACE INTO budgets VALUES (?,?)", (cat,limit))
-        conn.commit()
-        st.rerun()
-
-    budgets = load_budgets()
-    st.dataframe(budgets)
-
-    st.subheader("⚠️ Контроль бюджету")
-
-    for _,b in budgets.iterrows():
-        spent = df[(df.category==b.category)&(df.type=="expense")]["amount"].sum()
-
-        if spent > b.limit_amount:
-            st.error(f"{b.category}: {spent}/{b.limit_amount} 🔥 перевищено")
-        else:
-            st.write(f"{b.category}: {spent}/{b.limit_amount}")
+st.subheader("🧾 Історія")
+st.dataframe(filtered.sort_values("date", ascending=False))
