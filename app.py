@@ -7,7 +7,7 @@ import uuid
 # =========================================================
 # CONFIG
 # =========================================================
-st.set_page_config(page_title="Wallet Salyvon", layout="wide")
+st.set_page_config(page_title="Wallet", layout="wide")
 
 conn = sqlite3.connect("wallet_v7.db", check_same_thread=False)
 c = conn.cursor()
@@ -77,7 +77,7 @@ def df_acc():
 # =========================================================
 # UI
 # =========================================================
-st.title("💼 Wallet Pro V7 — Financial OS")
+st.title("💼 Wallet Salyvon")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 Дашборд",
