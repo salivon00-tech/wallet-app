@@ -82,7 +82,7 @@ accounts = load_accounts()
 budgets = load_budgets()
 
 # =========================================================
-# UI STYLE
+# STYLE
 # =========================================================
 st.markdown("""
 <style>
@@ -143,12 +143,10 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # DASHBOARD
 # =========================================================
 with tab1:
-    st.subheader("👨‍👩‍👧 Сімейний розподіл")
+    st.subheader("👨‍👩‍👧 Сімейні витрати")
 
     if not df.empty:
         st.bar_chart(df.groupby("person")["amount"].sum())
-
-        st.subheader("Категорії")
         st.bar_chart(df[df.type=="expense"].groupby("category")["amount"].sum())
 
 # =========================================================
@@ -157,20 +155,25 @@ with tab1:
 with tab2:
     st.subheader("➕ Додати транзакцію")
 
-    person = st.selectbox("Хто", ["Ви", "Дружина"])
+    person = st.selectbox(
+        "Хто витратив",
+        ["Влад", "Сонечко"],
+        key="person_select"
+    )
 
     account = st.selectbox(
         "Рахунок",
-        ["Картка 1", "Картка 2", "Кредитка", "Готівка", "Крипта", "Інвестиції"]
+        ["Картка 1", "Картка 2", "Кредитка", "Готівка", "Крипта", "Інвестиції"],
+        key="account_select"
     )
 
-    t = st.selectbox("Тип", ["income","expense"])
+    t = st.selectbox("Тип", ["income","expense"], key="type_select")
 
-    cat = st.text_input("Категорія")
+    cat = st.text_input("Категорія", key="tx_category")
 
-    amt = st.number_input("Сума", min_value=0.0)
+    amt = st.number_input("Сума", min_value=0.0, key="tx_amount")
 
-    if st.button("Додати"):
+    if st.button("Додати", key="add_tx_btn"):
         add_tx(person, account, t, cat, amt)
         st.rerun()
 
@@ -178,16 +181,16 @@ with tab2:
 
     if not df.empty:
         for _, row in df.sort_values("date", ascending=False).iterrows():
-            col1,col2,col3,col4,col5,col6 = st.columns(6)
+            c1,c2,c3,c4,c5,c6 = st.columns(6)
 
-            with col1: st.write(row["person"])
-            with col2: st.write(row["account"])
-            with col3: st.write(row["type"])
-            with col4: st.write(row["category"])
-            with col5: st.write(row["amount"])
+            with c1: st.write(row["person"])
+            with c2: st.write(row["account"])
+            with c3: st.write(row["type"])
+            with c4: st.write(row["category"])
+            with c5: st.write(row["amount"])
 
-            with col6:
-                if st.button("❌", key=row["id"]):
+            with c6:
+                if st.button("❌", key=f"del_{row['id']}"):
                     delete_tx(row["id"])
                     st.rerun()
 
@@ -197,10 +200,10 @@ with tab2:
 with tab3:
     st.subheader("🏦 Рахунки")
 
-    name = st.text_input("Назва рахунку")
-    type_ = st.selectbox("Тип", ["card","cash","crypto","investment","credit"])
+    name = st.text_input("Назва рахунку", key="acc_name")
+    type_ = st.selectbox("Тип", ["card","cash","crypto","investment","credit"], key="acc_type")
 
-    if st.button("Додати рахунок"):
+    if st.button("Додати рахунок", key="add_acc"):
         add_account(name,type_)
         st.rerun()
 
@@ -212,10 +215,10 @@ with tab3:
 with tab4:
     st.subheader("🎯 Бюджети")
 
-    cat = st.text_input("Категорія")
-    limit = st.number_input("Ліміт", min_value=0.0)
+    cat = st.text_input("Категорія", key="budget_cat")
+    limit = st.number_input("Ліміт", min_value=0.0, key="budget_limit")
 
-    if st.button("Зберегти"):
+    if st.button("Зберегти", key="save_budget"):
         c.execute("INSERT OR REPLACE INTO budgets VALUES (?,?)", (cat,limit))
         conn.commit()
         st.rerun()
