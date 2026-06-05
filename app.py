@@ -8,12 +8,12 @@ import requests
 # =========================================================
 # CONFIG
 # =========================================================
-st.set_page_config(page_title="Wallet Salyvon V16", layout="wide")
+st.set_page_config(page_title="Wallet Salyvon V16.1", layout="wide")
 
 # =========================================================
 # DB
 # =========================================================
-conn = sqlite3.connect("wallet_v16.db", check_same_thread=False)
+conn = sqlite3.connect("wallet_v16_1.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""
@@ -29,36 +29,25 @@ CREATE TABLE IF NOT EXISTS transactions (
 )
 """)
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS accounts (
-    name TEXT PRIMARY KEY,
-    type TEXT,
-    currency TEXT
-)
-""")
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS budgets (
-    category TEXT PRIMARY KEY,
-    limit_amount REAL
-)
-""")
-
 conn.commit()
 
 # =========================================================
-# FX (NBU SAFE)
+# FX (SAFE NBU)
 # =========================================================
 @st.cache_data(ttl=3600)
 def get_nbu():
     try:
         url = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json"
         data = requests.get(url, timeout=5).json()
+
         rates = {"UAH": 1}
+
         if isinstance(data, list):
             for i in data:
                 rates[i["cc"]] = i["rate"]
+
         return rates
+
     except:
         return {"UAH": 1, "USD": 41, "EUR": 44, "PLN": 10}
 
@@ -68,16 +57,33 @@ def to_uah(amount, cur):
     return amount * FX.get(cur, 1)
 
 # =========================================================
-# DATA
+# SAFE LOAD (CRASH-PROOF)
 # =========================================================
 def load_df():
+
     df = pd.read_sql("SELECT * FROM transactions", conn)
+
+    # 🧠 EMPTY SAFE STATE
     if df.empty:
-        return df
-    df["date"] = pd.to_datetime(df["date"])
-    df["uah"] = df.apply(lambda r: to_uah(r["amount"], r["currency"]), axis=1)
+        return pd.DataFrame(columns=[
+            "id","person","account","type",
+            "category","amount","currency","date","uah"
+        ])
+
+    # DATE SAFE
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    # UAH ALWAYS EXISTS
+    df["uah"] = df.apply(
+        lambda r: to_uah(r["amount"], r["currency"]),
+        axis=1
+    )
+
     return df
 
+# =========================================================
+# ADD TX SAFE
+# =========================================================
 def add_tx(p, acc, t, cat, amt, cur):
     c.execute("""
         INSERT INTO transactions VALUES (?,?,?,?,?,?,?,?)
@@ -91,19 +97,22 @@ def add_tx(p, acc, t, cat, amt, cur):
 df = load_df()
 
 # =========================================================
-# SIDEBAR NAVIGATION (FIX UI STRUCTURE)
+# UI
+# =========================================================
+st.title("💼 Wallet Salyvon V16.1 — Stable UX")
+
+# =========================================================
+# FILTER SAFE
 # =========================================================
 page = st.sidebar.radio(
-    "💼 Wallet Salyvon",
-    ["📊 Dashboard", "➕ Transactions", "🏦 Accounts", "🎯 Budgets", "👨‍👩‍👧 Family", "💰 Assets"]
+    "Menu",
+    ["📊 Dashboard", "➕ Transactions"]
 )
 
-st.title("💼 Wallet Salyvon V16")
-
-# =========================================================
-# FILTER (GLOBAL)
-# =========================================================
-period = st.sidebar.selectbox("📅 Period", ["Today","7D","Month","Year","All"])
+period = st.sidebar.selectbox(
+    "Period",
+    ["Today","7D","Month","Year","All"]
+)
 
 now = datetime.now()
 
@@ -122,33 +131,48 @@ else:
         filtered = df
 
 # =========================================================
+# SAFE METRICS (NO CRASH EVER)
+# =========================================================
+def safe_sum(df, t):
+    if df.empty or "uah" not in df.columns:
+        return 0
+    return df[df.type==t]["uah"].sum()
+
+income = safe_sum(filtered, "income")
+expense = safe_sum(filtered, "expense")
+balance = income - expense
+
+# =========================================================
 # DASHBOARD
 # =========================================================
 if page == "📊 Dashboard":
 
-    income = filtered[filtered.type=="income"]["uah"].sum()
-    expense = filtered[filtered.type=="expense"]["uah"].sum()
-    balance = income - expense
+    st.metric("💰 Balance (UAH)", f"{balance:,.0f}")
 
-    st.metric("💰 Net Balance (UAH)", f"{balance:,.0f}")
-
-    c1, c2, c3 = st.columns(3)
+    c1,c2,c3 = st.columns(3)
     c1.metric("Income", f"{income:,.0f}")
     c2.metric("Expense", f"{expense:,.0f}")
-    c3.metric("Tx Count", len(filtered))
+    c3.metric("Transactions", len(filtered))
 
     st.divider()
 
     st.subheader("📊 Expenses by Category")
-    if not filtered.empty:
-        st.bar_chart(filtered[filtered.type=="expense"].groupby("category")["uah"].sum())
+
+    if filtered.empty:
+        st.info("No data yet — add your first transaction 💡")
+    else:
+        exp = filtered[filtered.type=="expense"]
+        if not exp.empty:
+            st.bar_chart(exp.groupby("category")["uah"].sum())
+        else:
+            st.info("No expenses yet")
 
 # =========================================================
 # TRANSACTIONS
 # =========================================================
 elif page == "➕ Transactions":
 
-    st.subheader("➕ Add Transaction")
+    st.subheader("➕ Add transaction")
 
     person = st.selectbox("Person", ["Влад","Сонечко"])
     account = st.text_input("Account")
@@ -161,81 +185,13 @@ elif page == "➕ Transactions":
         add_tx(person, account, t, cat, amt, cur)
         st.rerun()
 
-    st.subheader("📜 History")
-    st.dataframe(filtered.sort_values("date", ascending=False))
+    if filtered.empty:
+        st.info("No transactions yet")
+    else:
+        st.dataframe(filtered.sort_values("date", ascending=False))
 
 # =========================================================
-# ACCOUNTS
+# FOOTER SAFE STATE
 # =========================================================
-elif page == "🏦 Accounts":
-
-    st.subheader("🏦 Accounts")
-
-    name = st.text_input("Name")
-    type_ = st.selectbox("Type", ["card","cash","crypto","investment"])
-    cur = st.selectbox("Currency", ["UAH","USD","EUR","PLN"])
-
-    if st.button("Add account"):
-        c.execute("INSERT OR IGNORE INTO accounts VALUES (?,?,?)", (name,type_,cur))
-        conn.commit()
-        st.rerun()
-
-    st.dataframe(pd.read_sql("SELECT * FROM accounts", conn))
-
-# =========================================================
-# BUDGETS
-# =========================================================
-elif page == "🎯 Budgets":
-
-    st.subheader("🎯 Budgets")
-
-    cat = st.text_input("Category")
-    lim = st.number_input("Limit", min_value=0.0)
-
-    if st.button("Save budget"):
-        c.execute("INSERT OR REPLACE INTO budgets VALUES (?,?)", (cat, lim))
-        conn.commit()
-        st.rerun()
-
-    budgets = pd.read_sql("SELECT * FROM budgets", conn)
-    st.dataframe(budgets)
-
-    st.subheader("⚠️ Control")
-
-    for _, b in budgets.iterrows():
-        spent = filtered[(filtered.category==b.category)&(filtered.type=="expense")]["uah"].sum()
-
-        if spent > b.limit_amount:
-            st.error(f"🔥 {b.category}: {spent:,.0f}/{b.limit_amount}")
-        else:
-            st.write(f"{b.category}: {spent:,.0f}/{b.limit_amount}")
-
-# =========================================================
-# FAMILY
-# =========================================================
-elif page == "👨‍👩‍👧 Family":
-
-    st.subheader("Family Overview (Влад / Сонечко)")
-
-    if not filtered.empty:
-        st.bar_chart(filtered.groupby("person")["uah"].sum())
-
-# =========================================================
-# ASSETS
-# =========================================================
-elif page == "💰 Assets":
-
-    st.subheader("💰 Assets Breakdown")
-
-    if not filtered.empty:
-        cards = filtered[filtered.account.str.contains("card", case=False, na=False)]["uah"].sum()
-        cash = filtered[filtered.account.str.contains("cash", case=False, na=False)]["uah"].sum()
-        fx = filtered[filtered.currency.isin(["USD","EUR","PLN"])]["uah"].sum()
-
-        c1,c2,c3 = st.columns(3)
-        c1.metric("Cards", f"{cards:,.0f}")
-        c2.metric("Cash", f"{cash:,.0f}")
-        c3.metric("FX", f"{fx:,.0f}")
-
-        st.subheader("FX Exposure")
-        st.bar_chart(filtered.groupby("currency")["uah"].sum())
+st.sidebar.markdown("---")
+st.sidebar.info("V16.1 Stable UX — no crashes mode 🧠")
