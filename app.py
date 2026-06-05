@@ -2,202 +2,177 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime
-import calendar
-
-st.set_page_config(page_title="Wallet Pro v3", layout="wide")
-
-DB = "wallet_v3.db"
-conn = sqlite3.connect(DB, check_same_thread=False)
-c = conn.cursor()
 
 # -------------------------
-# DB INIT
+# PAGE CONFIG
 # -------------------------
-c.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY
+st.set_page_config(
+    page_title="Wallet Budget",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
-""")
+
+# -------------------------
+# DB
+# -------------------------
+conn = sqlite3.connect("wallet.db", check_same_thread=False)
+c = conn.cursor()
 
 c.execute("""
 CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user TEXT,
     type TEXT,
     category TEXT,
     amount REAL,
-    date TEXT,
-    weekday TEXT,
-    recurring INTEGER DEFAULT 0
+    date TEXT
 )
 """)
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS budgets (
-    user TEXT,
-    category TEXT,
-    limit_amount REAL,
-    PRIMARY KEY (user, category)
-)
-""")
-
 conn.commit()
 
 # -------------------------
-# HELPERS
+# FUNCTIONS
 # -------------------------
-def add_user(u):
-    c.execute("INSERT OR IGNORE INTO users VALUES (?)", (u,))
+def add_tx(t, cat, amt):
+    c.execute(
+        "INSERT INTO transactions(type,category,amount,date) VALUES (?,?,?,?)",
+        (t, cat, amt, datetime.now().strftime("%Y-%m-%d"))
+    )
     conn.commit()
 
-def add_tx(data):
-    c.execute("""
-    INSERT INTO transactions
-    (user,type,category,amount,date,weekday,recurring)
-    VALUES (?,?,?,?,?,?,?)
-    """, data)
-    conn.commit()
-
-def get_df():
+def load():
     return pd.read_sql("SELECT * FROM transactions", conn)
 
-def get_budgets():
-    return pd.read_sql("SELECT * FROM budgets", conn)
+df = load()
 
 # -------------------------
-# UI
+# STYLE (Budget App look)
 # -------------------------
-st.title("💰 Wallet Pro v3 — FINTECH EDITION")
+st.markdown("""
+<style>
+    body {
+        background-color: #f6f7fb;
+    }
 
-# -------------------------
-# LOGIN
-# -------------------------
-st.sidebar.header("🔐 Користувач")
-user = st.sidebar.text_input("Ім'я", "Я")
+    .card {
+        background: white;
+        padding: 18px;
+        border-radius: 16px;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+        text-align: center;
+    }
 
-add_user(user)
+    .title {
+        font-size: 14px;
+        color: #6b7280;
+    }
 
-# -------------------------
-# INPUT
-# -------------------------
-st.sidebar.header("➕ Транзакція")
+    .value {
+        font-size: 28px;
+        font-weight: 700;
+        margin-top: 5px;
+    }
 
-t_type = st.sidebar.selectbox("Тип", ["Дохід","Витрата"])
-category = st.sidebar.selectbox("Категорія", ["Їжа","Дім","Транспорт","Розваги","Здоров'я","Інше"])
-amount = st.sidebar.number_input("Сума", min_value=0.0)
-recurring = st.sidebar.checkbox("Повторювана")
+    .income { color: #16a34a; }
+    .expense { color: #ef4444; }
 
-date = st.sidebar.date_input("Дата", datetime.now())
-weekday = calendar.day_name[date.weekday()]
+    .stButton button {
+        background: #4f46e5;
+        color: white;
+        border-radius: 12px;
+        padding: 10px;
+        font-weight: 600;
+        width: 100%;
+    }
 
-if st.sidebar.button("Додати"):
-    add_tx((user,t_type,category,amount,str(date),weekday,int(recurring)))
-    st.success("Додано 😏")
+    .block-container {
+        padding-top: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # -------------------------
 # DATA
 # -------------------------
-df = get_df()
-budgets = get_budgets()
-
-if df.empty:
-    st.info("Нема даних")
-    st.stop()
-
-user_df = df[df.user == user]
-
-# -------------------------
-# KPIs
-# -------------------------
-income = user_df[user_df.type=="Дохід"].amount.sum()
-expense = user_df[user_df.type=="Витрата"].amount.sum()
+income = df[df["type"] == "income"]["amount"].sum() if not df.empty else 0
+expense = df[df["type"] == "expense"]["amount"].sum() if not df.empty else 0
 balance = income - expense
 
-c1,c2,c3 = st.columns(3)
-c1.metric("💰 Дохід", income)
-c2.metric("💸 Витрати", expense)
-c3.metric("📊 Баланс", balance)
+# -------------------------
+# HEADER
+# -------------------------
+st.title("💼 Wallet Budget")
 
-if balance < 0:
-    st.error("⚠️ Мінус бюджет!")
+st.write("Track your money simply & clean.")
+
+# -------------------------
+# CARDS
+# -------------------------
+c1, c2, c3 = st.columns(3)
+
+with c1:
+    st.markdown(f"""
+    <div class="card">
+        <div class="title">Balance</div>
+        <div class="value">{balance:.2f} ₴</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with c2:
+    st.markdown(f"""
+    <div class="card">
+        <div class="title">Income</div>
+        <div class="value income">{income:.2f} ₴</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with c3:
+    st.markdown(f"""
+    <div class="card">
+        <div class="title">Expenses</div>
+        <div class="value expense">{expense:.2f} ₴</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 st.divider()
 
 # -------------------------
-# AI INSIGHT (простий rule-based)
+# QUICK ADD (Budget style)
 # -------------------------
-st.subheader("🧠 Інсайти")
+st.subheader("➕ Add expense / income")
 
-avg_food = user_df[user_df.category=="Їжа"]["amount"].mean()
+col1, col2, col3 = st.columns(3)
 
-if avg_food > 500:
-    st.warning("Ти витрачаєш забагато на їжу 😏")
+with col1:
+    ttype = st.selectbox("Type", ["income", "expense"])
 
-if user_df[user_df.recurring==1].amount.sum() > 1000:
-    st.info("Є великі повторювані платежі — перевір підписки")
+with col2:
+    category = st.selectbox("Category", [
+        "Food", "Home", "Transport", "Fun", "Health", "Other"
+    ])
 
-# -------------------------
-# WEEK ANALYTICS
-# -------------------------
-st.subheader("📅 Витрати по днях")
+with col3:
+    amount = st.number_input("Amount", min_value=0.0)
 
-st.line_chart(user_df.groupby("weekday")["amount"].sum())
-
-# -------------------------
-# CATEGORY
-# -------------------------
-st.subheader("📊 Категорії")
-
-st.bar_chart(user_df[user_df.type=="Витрата"].groupby("category")["amount"].sum())
+if st.button("Add transaction"):
+    add_tx(ttype, category, amount)
+    st.rerun()
 
 # -------------------------
-# CALENDAR VIEW (простий)
+# CATEGORY OVERVIEW (Budget vibe)
 # -------------------------
-st.subheader("📆 Останні дні")
+st.subheader("📊 Spending by category")
 
-st.dataframe(user_df.sort_values("date", ascending=False).head(20))
-
-# -------------------------
-# RECURRING
-# -------------------------
-st.subheader("🔁 Повторювані платежі")
-
-st.dataframe(user_df[user_df.recurring==1])
+if not df.empty:
+    expense_df = df[df["type"] == "expense"]
+    cat = expense_df.groupby("category")["amount"].sum()
+    st.bar_chart(cat)
 
 # -------------------------
-# BUDGET CONTROL
+# RECENT TRANSACTIONS
 # -------------------------
-st.subheader("🎯 Бюджети")
+st.subheader("🧾 Recent transactions")
 
-cat = st.selectbox("Категорія бюджету", ["Їжа","Дім","Транспорт","Розваги","Здоров'я","Інше"])
-limit = st.number_input("Ліміт", min_value=0.0)
-
-if st.button("Зберегти бюджет"):
-    c.execute("""
-    INSERT OR REPLACE INTO budgets VALUES (?,?,?)
-    """, (user,cat,limit))
-    conn.commit()
-
-bud_df = budgets[budgets.user==user]
-st.dataframe(bud_df)
-
-# -------------------------
-# ALERTS
-# -------------------------
-st.subheader("⚠️ Контроль бюджету")
-
-for _, b in bud_df.iterrows():
-    spent = user_df[user_df.category==b.category]["amount"].sum()
-    if spent > b.limit_amount:
-        st.error(f"{b.category}: перевищено {spent}/{b.limit_amount}")
-    else:
-        st.write(f"{b.category}: {spent}/{b.limit_amount}")
-
-# -------------------------
-# EXPORT
-# -------------------------
-st.download_button(
-    "⬇️ Експорт CSV",
-    user_df.to_csv(index=False),
-    file_name="wallet_v3.csv"
-)
+if df.empty:
+    st.info("No transactions yet")
+else:
+    st.dataframe(df.sort_values("date", ascending=False), use_container_width=True)
