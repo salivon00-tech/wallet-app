@@ -7,7 +7,7 @@ import uuid
 # =========================================================
 # CONFIG
 # =========================================================
-st.set_page_config(page_title="Wallet Pro V7", layout="wide")
+st.set_page_config(page_title="Wallet Salyvon", layout="wide")
 
 conn = sqlite3.connect("wallet_v7.db", check_same_thread=False)
 c = conn.cursor()
