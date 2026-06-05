@@ -6,14 +6,14 @@ import uuid
 import requests
 
 # =========================================================
-# APP CONFIG
+# CONFIG
 # =========================================================
-st.set_page_config(page_title="Wallet Salyvon V14", layout="wide")
+st.set_page_config(page_title="Wallet Salyvon V15", layout="wide")
 
 # =========================================================
 # DB
 # =========================================================
-conn = sqlite3.connect("wallet_salyvon_v14.db", check_same_thread=False)
+conn = sqlite3.connect("wallet_salyvon_v15.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""
@@ -47,39 +47,36 @@ CREATE TABLE IF NOT EXISTS budgets (
 conn.commit()
 
 # =========================================================
-# LIVE NBU FX
+# SAFE NBU FX (WITH FALLBACK)
 # =========================================================
 @st.cache_data(ttl=3600)
 def get_nbu():
-    url = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json"
-    data = requests.get(url).json()
-    rates = {"UAH": 1}
-    for i in data:
-        rates[i["cc"]] = i["rate"]
-    return rates
+    try:
+        url = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json"
+        data = requests.get(url, timeout=5).json()
+
+        if not isinstance(data, list):
+            raise ValueError("bad response")
+
+        rates = {"UAH": 1}
+        for i in data:
+            rates[i["cc"]] = i["rate"]
+
+        return rates
+
+    except Exception:
+        # fallback (last known safe values)
+        return {
+            "UAH": 1,
+            "USD": 41,
+            "EUR": 44,
+            "PLN": 10
+        }
 
 FX = get_nbu()
 
 def to_uah(amount, currency):
     return amount * FX.get(currency, 1)
-
-# =========================================================
-# BINANCE CRYPTO
-# =========================================================
-@st.cache_data(ttl=30)
-def get_binance():
-    url = "https://api.binance.com/api/v3/ticker/price"
-    data = requests.get(url).json()
-    return {i["symbol"]: float(i["price"]) for i in data}
-
-CRYPTO = get_binance()
-
-def crypto_to_uah(amount, coin):
-    usd_uah = FX.get("USD", 40)
-    price = CRYPTO.get(coin + "USDT")
-    if price:
-        return amount * price * usd_uah
-    return 0
 
 # =========================================================
 # HELPERS
@@ -102,24 +99,18 @@ def add_tx(person, account, t, cat, amt, cur):
 def load_df():
     df = pd.read_sql("SELECT * FROM transactions", conn)
     df["date"] = pd.to_datetime(df["date"])
-
-    def convert(r):
-        if r["currency"] in ["BTC", "ETH"]:
-            return crypto_to_uah(r["amount"], r["currency"])
-        return to_uah(r["amount"], r["currency"])
-
-    df["uah"] = df.apply(convert, axis=1)
+    df["uah"] = df.apply(lambda r: to_uah(r["amount"], r["currency"]), axis=1)
     return df
 
 df = load_df()
 
 # =========================================================
-# TITLE
+# UI
 # =========================================================
-st.title("💼 Wallet Salyvon V14")
+st.title("💼 Wallet Salyvon V15 — Stable Edition")
 
 # =========================================================
-# FILTERS
+# PERIOD FILTER
 # =========================================================
 period = st.selectbox("📅 Період", ["Сьогодні","7 днів","Місяць","Рік","Все"])
 
@@ -143,24 +134,24 @@ income = filtered[filtered.type=="income"]["uah"].sum()
 expense = filtered[filtered.type=="expense"]["uah"].sum()
 balance = income - expense
 
-st.metric("💰 Net Worth (UAH)", f"{balance:,.0f}")
+st.metric("💰 Баланс (UAH)", f"{balance:,.0f}")
 
 # =========================================================
-# BREAKDOWN (IMPORTANT UPGRADE)
+# BREAKDOWN
 # =========================================================
-st.subheader("🏦 Структура активів")
+st.subheader("🏦 Розподіл коштів")
 
 cards = filtered[filtered.account.str.contains("Карт")]["uah"].sum()
 cash = filtered[filtered.account.str.contains("Готів")]["uah"].sum()
-crypto = filtered[filtered.currency.isin(["BTC","ETH"])]["uah"].sum()
 fx = filtered[filtered.currency.isin(["USD","EUR","PLN"])]["uah"].sum()
+crypto_manual = filtered[filtered.currency.isin(["BTC","ETH"])]["uah"].sum()
 
 c1,c2,c3,c4 = st.columns(4)
 
 c1.metric("💳 Карти", f"{cards:,.0f} ₴")
 c2.metric("💵 Готівка", f"{cash:,.0f} ₴")
 c3.metric("💱 Валюта", f"{fx:,.0f} ₴")
-c4.metric("₿ Крипта", f"{crypto:,.0f} ₴")
+c4.metric("₿ Крипта (ручна оцінка)", f"{crypto_manual:,.0f} ₴")
 
 st.divider()
 
@@ -174,19 +165,19 @@ with col1:
     st.bar_chart(filtered.groupby("person")["uah"].sum())
 
 with col2:
-    st.subheader("📊 Категорії витрат")
+    st.subheader("📊 Категорії")
     st.bar_chart(filtered[filtered.type=="expense"].groupby("category")["uah"].sum())
 
 # =========================================================
-# BUDGET ENGINE
+# BUDGETS
 # =========================================================
 st.subheader("🎯 Бюджети")
 
-cat = st.text_input("Категорія", key="b1")
-lim = st.number_input("Ліміт", key="b2", min_value=0.0)
+bcat = st.text_input("Категорія", key="bcat")
+blim = st.number_input("Ліміт", min_value=0.0, key="blim")
 
 if st.button("Зберегти бюджет"):
-    c.execute("INSERT OR REPLACE INTO budgets VALUES (?,?)", (cat, lim))
+    c.execute("INSERT OR REPLACE INTO budgets VALUES (?,?)", (bcat, blim))
     conn.commit()
     st.rerun()
 
@@ -197,9 +188,9 @@ for _, b in budgets.iterrows():
     spent = filtered[(filtered.category==b.category)&(filtered.type=="expense")]["uah"].sum()
 
     if spent > b.limit_amount:
-        st.error(f"🔥 {b.category}: {spent:,.0f} / {b.limit_amount}")
+        st.error(f"🔥 {b.category}: {spent:,.0f}/{b.limit_amount}")
     else:
-        st.write(f"{b.category}: {spent:,.0f} / {b.limit_amount}")
+        st.write(f"{b.category}: {spent:,.0f}/{b.limit_amount}")
 
 st.divider()
 
@@ -209,7 +200,7 @@ st.divider()
 st.subheader("➕ Додати транзакцію")
 
 person = st.selectbox("Хто", ["Влад","Сонечко"])
-account = st.text_input("Рахунок")
+account = st.text_input("Рахунок (Картка / Готівка / тощо)")
 t = st.selectbox("Тип", ["income","expense"])
 cat = st.text_input("Категорія")
 cur = st.selectbox("Валюта", ["UAH","USD","EUR","PLN","BTC","ETH"])
