@@ -141,6 +141,15 @@ def default_data():
         ],
         "budgets": {c["id"]: c["budget"] for c in EXP_CATS},
         "budget_month": THIS_MONTH,
+        "roadmap": [
+            {"id": uid(), "month": 1,  "icon": "💳", "text": "Закрити кредитку 12 260 ₴ одним платежем"},
+            {"id": uid(), "month": 2,  "icon": "🚀", "text": "Старт: 7 400 ₴ → Binance (весільні), 4 400 ₴ → Inzhur REIT, 3 200 ₴ → Mono"},
+            {"id": uid(), "month": 6,  "icon": "🚨", "text": "Швидка каса 20 000 ₴ набрана"},
+            {"id": uid(), "month": 12, "icon": "💍", "text": "Весільні 2 000$ повернуті на Binance Flexible"},
+            {"id": uid(), "month": 14, "icon": "🏗️", "text": "Старт: 8 000 ₴/міс ремонт + 4 000 ₴ → Inzhur Energy"},
+            {"id": uid(), "month": 15, "icon": "🛡️", "text": "Подушка сім'ї 1 500$ в Inzhur REIT"},
+            {"id": uid(), "month": 30, "icon": "🏠", "text": "Косметичний ремонт готовий, квартира здається в оренду"},
+        ],
     }
 
 def load_data():
@@ -858,32 +867,37 @@ def page_savings(data, user_filter):
 def page_goals(data, user_filter):
     st.markdown('<div class="h1-title">🎯 Фінансові цілі</div>', unsafe_allow_html=True)
 
+    if "roadmap" not in data:
+        data["roadmap"] = []
+
     goals = data["goals"]
     total_pct = 0
     if goals:
         nums = [min(1, g["saved"]/g["target"]) if g["target"] > 0 else 0 for g in goals]
         total_pct = round(sum(nums)/len(nums)*100)
 
+    done_count = sum(1 for g in goals if g["saved"] >= g["target"])
     st.markdown(f"""
     <div class="wallet-card-hero" style="text-align:center">
-        <div class="section-label">Загальний прогрес</div>
-        <div class="h1-title" style="font-size:56px;color:#a78bfa;letter-spacing:-.04em">{total_pct}%</div>
+        <div class="section-label">Загальний прогрес цілей</div>
+        <div class="h1-title" style="font-size:52px;color:#a78bfa;letter-spacing:-.04em">{total_pct}%</div>
         <div style="background:#1e1e3a;border-radius:99px;height:8px;overflow:hidden;margin-top:16px">
             <div style="width:{total_pct}%;height:100%;background:linear-gradient(90deg,#7B61FF,#a78bfa,#00D084);border-radius:99px"></div>
         </div>
+        <div style="color:#6b6b90;font-size:13px;margin-top:10px">{len(goals)} цілей · {done_count} виконано</div>
     </div>
     """, unsafe_allow_html=True)
 
-    for g in goals:
+    for g in list(goals):
         pct = min(100, round(g["saved"]/g["target"]*100)) if g["target"] > 0 else 0
         done = pct >= 100
         remaining = max(0, g["target"] - g["saved"])
-        border = g["color"] if done else "#1e1e3a"
+        label = f"{g['icon']} {g['label']} — {pct}%  {'✅' if done else ''}"
 
-        with st.expander(f"{g['icon']} {g['label']} — {pct}%  {'✅' if done else ''}", expanded=not done):
-            col_prog, col_edit = st.columns([3,2])
+        with st.expander(label, expanded=not done):
+            col_prog, col_edit = st.columns([3, 2])
             with col_prog:
-                st.markdown(f"""
+                bar_html = f"""
                 <div style="margin-bottom:12px">
                     <div style="display:flex;justify-content:space-between;margin-bottom:6px">
                         <span style="font-size:13px;color:#6b6b90">Накопичено: <strong style="color:{g['color']}">{fmt(g['saved'],g['currency'])}</strong></span>
@@ -896,40 +910,114 @@ def page_goals(data, user_filter):
                         Залишилось: <strong style="color:{g['color']}">{fmt(remaining,g['currency'])}</strong> · До: {g['deadline']}
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
+                """
+                st.markdown(bar_html, unsafe_allow_html=True)
             with col_edit:
-                new_saved = st.number_input("Накопичено", value=float(g["saved"]), min_value=0.0, step=100.0, key=f"goal_{g['id']}_saved")
-                new_target = st.number_input("Ціль", value=float(g["target"]), min_value=1.0, step=100.0, key=f"goal_{g['id']}_target")
-                if st.button("💾 Зберегти", key=f"goal_{g['id']}_save"):
-                    g["saved"] = new_saved
-                    g["target"] = new_target
-                    save_data(data); st.success("Збережено!"); st.rerun()
+                gid = g['id']
+                new_saved  = st.number_input("Накопичено",  value=float(g["saved"]),  min_value=0.0,  step=100.0, key=f"gs_{gid}_sav")
+                new_target = st.number_input("Ціль",        value=float(g["target"]), min_value=1.0,  step=100.0, key=f"gs_{gid}_tgt")
+                new_label  = st.text_input("Назва",         value=g["label"],  key=f"gs_{gid}_lbl")
+                col_ic, col_cl = st.columns(2)
+                with col_ic:
+                    new_icon  = st.text_input("Іконка", value=g["icon"],  key=f"gs_{gid}_ico")
+                with col_cl:
+                    new_color = st.color_picker("Колір", value=g["color"], key=f"gs_{gid}_col")
+                new_dl  = st.text_input("Дедлайн",    value=g["deadline"], key=f"gs_{gid}_dl")
+                new_cur = st.selectbox("Валюта", ["₴","$"], index=0 if g["currency"]=="₴" else 1, key=f"gs_{gid}_cur")
+                col_sv, col_dl2 = st.columns(2)
+                with col_sv:
+                    if st.button("💾 Зберегти", key=f"gs_{gid}_save", use_container_width=True):
+                        g["saved"]    = new_saved
+                        g["target"]   = new_target
+                        g["label"]    = new_label
+                        g["icon"]     = new_icon
+                        g["color"]    = new_color
+                        g["deadline"] = new_dl
+                        g["currency"] = new_cur
+                        save_data(data)
+                        st.success("Збережено!")
+                        st.rerun()
+                with col_dl2:
+                    if st.button("🗑️ Видалити", key=f"gs_{gid}_del", use_container_width=True):
+                        data["goals"] = [x for x in data["goals"] if x["id"] != gid]
+                        save_data(data)
+                        st.warning("Видалено!")
+                        st.rerun()
 
-    # Roadmap
     st.markdown("---")
-    st.markdown('<div class="section-label">Дорожня карта</div>', unsafe_allow_html=True)
-    plan_month = st.slider("Поточний місяць плану", 1, 36, 1)
-    ROAD = [
-        (1,  "💳", "Закрити кредитку 12 260 ₴ одним платежем"),
-        (2,  "🚀", "Старт: 7 400 ₴ → Binance (весільні), 4 400 ₴ → Inzhur REIT, 3 200 ₴ → Mono"),
-        (6,  "🚨", "Швидка каса 20 000 ₴ набрана ✓"),
-        (12, "💍", "Весільні 2 000$ повернуті на Binance Flexible"),
-        (14, "🏗️", "Старт: 8 000 ₴/міс ремонт + 4 000 ₴ → Inzhur Energy"),
-        (15, "🛡️", "Подушка сім'ї 1 500$ в Inzhur REIT"),
-        (30, "🏠", "Косметичний ремонт готовий, квартира здається в оренду"),
-    ]
-    for month, icon, text in ROAD:
-        done = month <= plan_month
+    with st.expander("➕ Додати нову ціль"):
+        c1, c2 = st.columns(2)
+        with c1:
+            ng_label  = st.text_input("Назва цілі", key="ng_label")
+            ng_target = st.number_input("Сума цілі", min_value=1.0, step=100.0, key="ng_target")
+            ng_cur    = st.selectbox("Валюта", ["₴","$"], key="ng_cur")
+            ng_saved  = st.number_input("Вже накопичено", min_value=0.0, step=100.0, key="ng_saved")
+        with c2:
+            ng_icon  = st.text_input("Іконка (емодзі)", value="🎯", key="ng_icon")
+            ng_color = st.color_picker("Колір", value="#7B61FF", key="ng_color")
+            ng_dl    = st.text_input("Дедлайн (РРРР-ММ-ДД)", value="2027-12-01", key="ng_dl")
+        if st.button("✅ Створити ціль", use_container_width=True, key="ng_create"):
+            if ng_label and ng_target > 0:
+                data["goals"].append({
+                    "id": uid(), "label": ng_label, "target": ng_target,
+                    "currency": ng_cur, "icon": ng_icon, "color": ng_color,
+                    "deadline": ng_dl, "saved": ng_saved,
+                })
+                save_data(data)
+                st.success(f"Ціль додано!")
+                st.rerun()
+
+    st.markdown("---")
+    st.markdown('<div class="h1-title" style="font-size:22px;margin-bottom:4px">🗺️ Дорожня карта</div>', unsafe_allow_html=True)
+    st.markdown('<div style="color:#6b6b90;font-size:13px;margin-bottom:16px">Відстежуй виконання плану по місяцях. Пересувай повзунок — виконані кроки підсвічуються.</div>', unsafe_allow_html=True)
+
+    plan_month = st.slider("Поточний місяць плану", 1, 60, 1, key="roadmap_slider")
+    roadmap = sorted(data.get("roadmap", []), key=lambda x: x["month"])
+
+    if not roadmap:
+        st.info("Дорожня карта порожня. Додай перший крок нижче.")
+
+    for item in roadmap:
+        done  = item["month"] <= plan_month
         color = "#7B61FF" if done else "#4a4880"
-        st.markdown(f"""
-        <div style="display:flex;gap:14px;padding:10px 0;border-bottom:1px solid #1e1e3a">
-            <div style="width:40px;height:40px;border-radius:50%;background:{'#7B61FF22' if done else '#1e1e3a'};border:2px solid {color};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">{icon}</div>
-            <div>
-                <div style="font-size:11px;color:{color};font-weight:700;letter-spacing:.08em;margin-bottom:2px">МІСЯЦЬ {month}</div>
-                <div style="font-size:13px;color:{'#f0efff' if done else '#4a4880'}">{text}</div>
+        glow  = "0 0 12px #7B61FF66" if done else "none"
+        bg    = "#7B61FF22" if done else "#1e1e3a"
+        tc    = "#f0efff" if done else "#6b6b90"
+        col_item, col_del = st.columns([6, 1])
+        with col_item:
+            st.markdown(f"""
+            <div style="display:flex;gap:14px;padding:10px 0;border-bottom:1px solid #1e1e3a;align-items:center">
+                <div style="width:40px;height:40px;border-radius:50%;background:{bg};border:2px solid {color};
+                    display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;box-shadow:{glow}">{item['icon']}</div>
+                <div>
+                    <div style="font-size:11px;color:{color};font-weight:700;letter-spacing:.08em;margin-bottom:2px">МІСЯЦЬ {item['month']}</div>
+                    <div style="font-size:13px;color:{tc};line-height:1.4">{item['text']}</div>
+                </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
+        with col_del:
+            st.markdown("<div style='margin-top:14px'></div>", unsafe_allow_html=True)
+            if st.button("🗑️", key=f"rd_{item['id']}", help="Видалити крок"):
+                data["roadmap"] = [r for r in data["roadmap"] if r["id"] != item["id"]]
+                save_data(data)
+                st.rerun()
+
+    st.markdown("---")
+    with st.expander("➕ Додати крок до дорожньої карти"):
+        c1, c2, c3 = st.columns([1, 1, 3])
+        with c1:
+            rm_month = st.number_input("Місяць", min_value=1, max_value=120, value=1, key="rm_month")
+        with c2:
+            rm_icon = st.text_input("Іконка", value="📌", key="rm_icon")
+        with c3:
+            rm_text = st.text_input("Опис кроку", placeholder="Що має статись?", key="rm_text")
+        if st.button("✅ Додати крок", use_container_width=True, key="rm_add"):
+            if rm_text:
+                data["roadmap"].append({"id": uid(), "month": rm_month, "icon": rm_icon, "text": rm_text})
+                save_data(data)
+                st.success(f"Крок для місяця {rm_month} додано!")
+                st.rerun()
+
 
 # ── PAGE: ANALYTICS ───────────────────────────────────────────────────────────
 def page_analytics(data, user_filter):
